@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+  <meta charset="UTF-8">
+  <title>YGO查卡器</title>
+  <style>
+    body { font-family: sans-serif; background: #f5f5f5; }
+    .main-layout {
+      display: flex;
+      max-width: 1100px;
+      margin: 40px auto;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px #0001;
+      min-height: 600px;
+    }
+    .deck-panel {
+      flex: 1.1;
+      border-right: 1px solid #eee;
+      padding: 32px 24px 32px 32px;
+      min-width: 320px;
+    }
+    .search-panel {
+      flex: 1.3;
+      padding: 32px 32px 32px 24px;
+      min-width: 350px;
+    }
+    .card { margin-top: 24px; }
+    .info h2 { margin: 0 0 8px; }
+    .desc { color: #555; margin-top: 8px; }
+    .deck-section { margin-bottom: 32px; }
+    .deck-section h2 { margin-bottom: 8px; }
+    .deck-list > div { margin-bottom: 4px; }
+    @media (max-width: 900px) {
+      .main-layout { flex-direction: column; }
+      .deck-panel, .search-panel { min-width: 0; padding: 20px; }
+      .deck-panel { border-right: none; border-bottom: 1px solid #eee; }
+    }
+  </style>
+</head>
+<body>
+  <div class="main-layout">
+    <div class="deck-panel">
+      <h1 style="margin-top:0;">YGO组卡器</h1>
+  <button onclick="exportYDK()" style="margin-bottom:20px;padding:8px 18px;">导出为.ydk文件</button>
+  <button onclick="clearAllDecks()" style="margin-left:12px;margin-bottom:20px;padding:8px 18px;">一键清空卡组</button>
+  <label style="margin-left:12px;display:inline-block;margin-bottom:20px;">
+    <input type="file" id="ydkFileInput" accept=".ydk" style="display:none">
+    <button type="button" onclick="document.getElementById('ydkFileInput').click()" style="padding:8px 18px;">打开.ydk文件</button>
+  </label>
+      <div class="deck-section">
+  <h2>主卡组 <span id="mainDeckCount" style="font-size:16px;color:#888;font-weight:normal"></span></h2>
+  <div class="deck-list" id="mainDeck"></div>
+      </div>
+      <div class="deck-section">
+  <h2>额外卡组 <span id="extraDeckCount" style="font-size:16px;color:#888;font-weight:normal"></span></h2>
+  <div class="deck-list" id="extraDeck"></div>
+      </div>
+      <div class="deck-section">
+  <h2>副卡组 <span id="sideDeckCount" style="font-size:16px;color:#888;font-weight:normal"></span></h2>
+  <div class="deck-list" id="sideDeck"></div>
+      </div>
+    </div>
+    <div class="search-panel">
+      <form id="searchForm" style="margin-bottom:24px;">
+        <input type="text" id="cardName" placeholder="输入卡片名称" required style="width:70%;padding:8px;">
+        <button type="submit" style="padding:8px 16px;">查找</button>
+      </form>
+      <div id="result"></div>
+    </div>
+  </div>
+  <script>
+    // 解析ydk文件并加载卡组
+    document.getElementById('ydkFileInput').addEventListener('change', async function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      // 解析ydk
+      const main = [], extra = [], side = [];
+      let section = '';
+      text.split(/\r?\n/).forEach(line => {
+        line = line.trim();
+        if (line === '#main') section = 'main';
+        else if (line === '#extra') section = 'extra';
+        else if (line === '!side') section = 'side';
+        else if (/^\d+$/.test(line)) {
+          if (section === 'main') main.push(line);
+          else if (section === 'extra') extra.push(line);
+          else if (section === 'side') side.push(line);
+        }
+      });
+      // 全部id（含重复，顺序不变）
+      const allIdsRaw = [...main, ...extra, ...side].map(id => String(Number(id)));
+      // 去重后查卡，分批每批1张，最大兼容API
+      const allIdsUnique = Array.from(new Set(allIdsRaw));
+      let idToCard = {};
+      try {
+        for (let i = 0; i < allIdsUnique.length; i += 1) {
+          const batch = allIdsUnique.slice(i, i+1);
+          const res = await fetch(`https://ygocdb.com/api/v0/?search=${batch.join(' ')}`);
+          const data = await res.json();
+          if (data.result) {
+            data.result.forEach(card => { idToCard[String(card.id)] = card; });
+          }
+        }
+      } catch (err) {
+        alert('卡片信息获取失败');
+        return;
+      }
+      // 填充卡组，保留重复
+      mainDeck.length = 0;
+      extraDeck.length = 0;
+      sideDeck.length = 0;
+      main.forEach(id => { if (idToCard[String(Number(id))]) mainDeck.push(idToCard[String(Number(id))]); });
+      extra.forEach(id => { if (idToCard[String(Number(id))]) extraDeck.push(idToCard[String(Number(id))]); });
+      side.forEach(id => { if (idToCard[String(Number(id))]) sideDeck.push(idToCard[String(Number(id))]); });
+      renderDecks();
+      alert('卡组已导入');
+    });
+    // 一键清空卡组
+    window.clearAllDecks = function() {
+      if (confirm('确定要清空所有卡组吗？')) {
+        mainDeck.length = 0;
+        extraDeck.length = 0;
+        sideDeck.length = 0;
+        renderDecks();
+      }
+    }
+    // 导出ydk文件
+    window.exportYDK = function() {
+      let content = '#created by ygo查卡器\n';
+      content += '#main\n';
+      mainDeck.forEach(card => { content += card.id + '\n'; });
+      content += '#extra\n';
+      extraDeck.forEach(card => { content += card.id + '\n'; });
+      content += '!side\n';
+      sideDeck.forEach(card => { content += card.id + '\n'; });
+      const blob = new Blob([content], {type: 'text/plain'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'deck.ydk';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+    // 组卡数据结构
+    const mainDeck = [];
+    const extraDeck = [];
+    const sideDeck = [];
+
+    // 判断卡片能加入哪些卡组
+    function getCardGroups(card) {
+      // 类型文本，融合、同调、超量、连接只能进额外/副，其它只能进主/副
+      const types = card.text.types || '';
+      if (/融合|同调|超量|连接/.test(types)) {
+        return ['extra', 'side'];
+      } else if (/怪兽/.test(types)) {
+        return ['main', 'side'];
+      } else {
+        // 其它如魔法、陷阱等只能进主/副
+        return ['main', 'side'];
+      }
+    }
+
+    // 渲染卡组
+    function renderDecks() {
+      function renderDeckRow(deck, deckType) {
+        if (deck.length === 0) return '<span style="color:#888">暂无</span>';
+        let html = '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
+        for (let i = 0; i < deck.length; i++) {
+          html += `
+            <div style="display:flex;flex-direction:column;align-items:center;width:44px;">
+              <img src="https://cdn.233.momobako.com/ygopro/pics/${deck[i].id}.jpg!thumb" width="44" height="64" style="border-radius:2px;box-shadow:0 1px 3px #0002;" alt="${deck[i].cn_name}">
+              <button onclick="removeCard('${deckType}',${i})" style="margin-top:2px;font-size:12px;padding:0 4px;">移除</button>
+            </div>
+          `;
+        }
+        html += '</div>';
+        return html;
+      }
+  document.getElementById('mainDeck').innerHTML = renderDeckRow(mainDeck, 'main');
+  document.getElementById('extraDeck').innerHTML = renderDeckRow(extraDeck, 'extra');
+  document.getElementById('sideDeck').innerHTML = renderDeckRow(sideDeck, 'side');
+  document.getElementById('mainDeckCount').textContent = `(${mainDeck.length})`;
+  document.getElementById('extraDeckCount').textContent = `(${extraDeck.length})`;
+  document.getElementById('sideDeckCount').textContent = `(${sideDeck.length})`;
+    }
+
+    // 移除卡片
+    window.removeCard = function(deck, idx) {
+      if (deck === 'main') mainDeck.splice(idx, 1);
+      if (deck === 'extra') extraDeck.splice(idx, 1);
+      if (deck === 'side') sideDeck.splice(idx, 1);
+      renderDecks();
+    }
+
+    // 统计卡组中同名卡数量
+    function countCardInDecks(card) {
+      const id = card.id;
+      let count = 0;
+      count += mainDeck.filter(c => c.id === id).length;
+      count += extraDeck.filter(c => c.id === id).length;
+      count += sideDeck.filter(c => c.id === id).length;
+      return count;
+    }
+
+    // 添加卡片
+    window.addCardToDeck = function(card, deck) {
+      // 限制：同名卡不能超过3张
+      const sameCount = countCardInDecks(card);
+      if (sameCount >= 3) {
+        alert('同名卡不能超过3张（主/额外/副卡组合计）');
+        return;
+      }
+      // 限制：主卡组40-60，额外/副卡组不超过15
+      if (deck === 'main') {
+        if (mainDeck.length >= 60) {
+          alert('主卡组不能超过60张');
+          return;
+        }
+        if (mainDeck.length < 39) {
+          mainDeck.push(card);
+        } else if (mainDeck.length >= 39 && mainDeck.length < 60) {
+          mainDeck.push(card);
+        }
+      }
+      if (deck === 'extra') {
+        if (extraDeck.length >= 15) {
+          alert('额外卡组不能超过15张');
+          return;
+        }
+        extraDeck.push(card);
+      }
+      if (deck === 'side') {
+        if (sideDeck.length >= 15) {
+          alert('副卡组不能超过15张');
+          return;
+        }
+        sideDeck.push(card);
+      }
+      renderDecks();
+    }
+
+    document.getElementById('searchForm').onsubmit = async function(e) {
+      e.preventDefault();
+      const name = document.getElementById('cardName').value.trim();
+      if (!name) return;
+      document.getElementById('result').innerHTML = '查询中...';
+      try {
+        const res = await fetch(`https://ygocdb.com/api/v0/?search=${encodeURIComponent(name)}`);
+        const data = await res.json();
+        if (!data.result || data.result.length === 0) {
+          document.getElementById('result').innerHTML = '未找到相关卡片。';
+          return;
+        }
+        // 展示所有结果，并加上加入卡组按钮
+        // 绑定全局addCardToDeck，避免JSON对象失效
+        window.searchResults = data.result;
+        const html = data.result.map((card, idx) => {
+          const groups = getCardGroups(card);
+          let btns = '';
+          if (groups.includes('main')) btns += `<button onclick='window.addCardToDeck(window.searchResults[${idx}],"main")'>加入主卡组</button> `;
+          if (groups.includes('extra')) btns += `<button onclick='window.addCardToDeck(window.searchResults[${idx}],"extra")'>加入额外卡组</button> `;
+          if (groups.includes('side')) btns += `<button onclick='window.addCardToDeck(window.searchResults[${idx}],"side")'>加入副卡组</button>`;
+          return `
+            <div class="card" style="margin-bottom:16px;display:flex;gap:16px;align-items:flex-start;">
+              <img src="https://cdn.233.momobako.com/ygopro/pics/${card.id}.jpg" width="160" height="232" style="border-radius:4px;box-shadow:0 2px 8px #0002;" alt="${card.cn_name}">
+              <div class="info">
+                <h2>${card.cn_name}</h2>
+                <div>攻击：${card.data.atk} / 防御：${card.data.def}</div>
+                <div>星级：${card.data.level}</div>
+                <div class="desc">${card.text.desc.replace(/\n/g, '<br>')}</div>
+                <div style="margin-top:8px;">${btns}</div>
+              </div>
+            </div>
+          `;
+        }).join('');
+        document.getElementById('result').innerHTML = html;
+      } catch (err) {
+        document.getElementById('result').innerHTML = '查询失败，请稍后重试。';
+      }
+    }
+
+    renderDecks();
+
+    // 导出时仅校验额外/副卡组数量
+    const oldExportYDK = window.exportYDK;
+    window.exportYDK = function() {
+      if (extraDeck.length > 15) {
+        alert('额外卡组不能超过15张');
+        return;
+      }
+      if (sideDeck.length > 15) {
+        alert('副卡组不能超过15张');
+        return;
+      }
+      oldExportYDK();
+    }
+  </script>
+</body>
+</html>
